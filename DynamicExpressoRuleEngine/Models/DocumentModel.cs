@@ -303,4 +303,17 @@ namespace DynamicExpressoRuleEngine.Models
         }
     }
     #endregion
+
+    public partial class CustomValidationRules
+    {
+        public int Id { get; set; }
+        public int OrgId { get; set; }
+        public bool HoiHighestDeductible { get; set; }
+        public int HoiReplacementCost { get; set; }
+        public int HoiDeductiblePercentage { get; set; }
+        public int HoiCondoReplacementCost { get; set; }
+        public int HoiEffectiveDateNumDays { get; set; }
+        public bool HoiEffectiveDateSameMonth { get; set; }
+        public bool AllowVestingBorrowerMatch { get; set; }
+    }
 }

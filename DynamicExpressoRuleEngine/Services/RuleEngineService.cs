@@ -1,12 +1,13 @@
 ﻿using DynamicExpresso;
 using DynamicExpressoRuleEngine.Models;
 using DynamicExpressoRuleEngine.ValidationError;
+using System.Globalization;
 
 namespace DynamicExpressoRuleEngine
 {
-    public static class RuleEngineService
+    public class RuleEngineService
     {
-        public static async Task RuleEngineValidateDocuments(MortgageValidatedDocument _doc, Loan? loanDetails)
+        public static async Task RuleEngineValidateDocuments(MortgageValidatedDocument _doc, Interpreter interpreter) 
         {
             try
             {
@@ -16,19 +17,21 @@ namespace DynamicExpressoRuleEngine
                  .Build();
 
                 var rules = config.GetSection("RuleEngine:Rules").Get<List<ValidationRule>>();
-
-                var interpreter = new Interpreter();
-
+                
                 foreach (var prop in _doc.ProcessedDocument.Results)
                 {
-                    interpreter.SetVariable(prop.Key, prop.Value);
+                    interpreter.SetVariable(prop.Key, prop?.Value == null?string.Empty:prop.Value.ToString());
                 }
 
-                interpreter.SetVariable("LoanDetails", loanDetails);
-                
-                interpreter.SetFunction("AddError", (string type, int? code, string? message, string? field) =>
+                interpreter.SetFunction("AddValue", (dynamic? value, string? field) =>
                 {
-                    Error? error = Create(code, message);
+                    var documentField = _doc.ProcessedDocument.Results.Where(x => x.Key == field).FirstOrDefault();
+                    documentField.Value = value;
+                });
+
+                interpreter.SetFunction("AddError", (int code, string? message, string? field, string? title = null) =>
+                {
+                    Error? error = Create(code, message, title);
 
                     if (string.IsNullOrEmpty(field))
                     {
@@ -37,13 +40,34 @@ namespace DynamicExpressoRuleEngine
                     else
                     {
                         var documentField = _doc.ProcessedDocument.Results.Where(x => x.Key == field).FirstOrDefault();
-
-                        if (type == "note")
-                            documentField?.ProcessingResult?.AddNote(message);
-                        else
-                            documentField?.ProcessingResult.AddError(error);
+                        documentField?.ProcessingResult.AddError(error);
                     }
                 });
+
+                interpreter.SetFunction("AddNotes", (string? message, string? field) =>
+                {
+                        var documentField = _doc.ProcessedDocument.Results.Where(x => x.Key == field).FirstOrDefault();
+                        documentField?.ProcessingResult.AddNote(message);
+                });
+
+                interpreter.SetFunction("AddPotentialValues", (dynamic? value, string? field) =>
+                {
+                    var documentField = _doc.ProcessedDocument.Results.Where(x => x.Key == field).FirstOrDefault();
+                    documentField?.ProcessingResult.AddPotentialValues(value);
+                });
+
+                interpreter.SetFunction("AddPotentialValues", (List<object>? value, string? field) =>
+                {
+                    var documentField = _doc.ProcessedDocument.Results.Where(x => x.Key == field).FirstOrDefault();
+                    documentField?.ProcessingResult.AddPotentialValues(value);
+                });
+
+                interpreter.SetFunction("SetVariable", (dynamic? value, string? field) =>
+                {
+                    interpreter.SetVariable(field, value);
+                });
+
+                interpreter.SetFunction("ToStringFormat", new Func<dynamic, string>(ToStringFormat));
 
                 foreach (var rule in rules)
                 {
@@ -51,13 +75,16 @@ namespace DynamicExpressoRuleEngine
 
                     if (result)
                     {
-                        interpreter.Eval(rule.Action);
+                        var actions = rule.Action.Split('#');
+                        foreach (var action in actions)
+                        {
+                            interpreter.Eval(action.Trim());
+                        }
                     }
                 }
             }
             catch (Exception ex)
             {
-
             }
         }
 
@@ -65,39 +92,77 @@ namespace DynamicExpressoRuleEngine
         {
             return errorCode switch
             {
-                (int)ErrorCodeEnum.RequiredFieldMissing => RequiredFieldMissing.Create(title, message),
-                (int)ErrorCodeEnum.GeneralError => GeneralError.Create(title, message),
-                (int)ErrorCodeEnum.LoanNumberMissing => LoanNumberMissing.Create(title, message),
-                (int)ErrorCodeEnum.AddressMismatch => AddressMismatch.Create(title, message),
-                (int)ErrorCodeEnum.NameMismatch => NameMismatch.Create(title, message),
-                (int)ErrorCodeEnum.LosIntegrationError => LosIntegrationError.Create(title, message),
-                (int)ErrorCodeEnum.BirthDateMismatch => BirthDateMismatch.Create(title, message),
-                (int)ErrorCodeEnum.LosAddressError => LosAddressError.Create(title, message),
-                (int)ErrorCodeEnum.DocAddressError => DocAddressError.Create(title, message),
-                (int)ErrorCodeEnum.ExpirationDateError => ExpirationDateError.Create(title, message),
-                (int)ErrorCodeEnum.EffectiveDateError => EffectiveDateError.Create(title, message),
-                (int)ErrorCodeEnum.LoanNumberMismatch => LoanNumberMismatch.Create(title, message),
-                (int)ErrorCodeEnum.CalculationError => CalculationError.Create(title, message),
-                (int)ErrorCodeEnum.DateError => DateError.Create(title, message),
-                (int)ErrorCodeEnum.ValueMismatchError => ValueMismatchError.Create(title, message),
-                (int)ErrorCodeEnum.EmployerMismatch => EmployerMismatch.Create(title, message),
-                (int)ErrorCodeEnum.LowConfidenceError => LowConfidenceError.Create(title, message),
-                (int)ErrorCodeEnum.DriversLicenseFormatError => DriversLicenseFormatError.Create(title, message),
-                (int)ErrorCodeEnum.DocStateError => DocStateError.Create(title, message),
-                (int)ErrorCodeEnum.EnableLLMQueryError => EnableLLMQueryError.Create(title, message),
-                (int)ErrorCodeEnum.DocumentOutdatedError => DocumentOutdatedError.Create(title, message),
-                (int)ErrorCodeEnum.InvalidPayTypeError => InvalidPayTypeError.Create(title, message),
-                (int)ErrorCodeEnum.MultipleDocumentsError => MultipleDocumentsError.Create(title, message),
-                (int)ErrorCodeEnum.ExpirationDateBeforeCloseError => ExpirationDateBeforeCloseError.Create(title, message),
-                (int)ErrorCodeEnum.ExpirationDateIssueDateMismatch => ExpirationDateIssueDateMismatch.Create(title, message),
-                (int)ErrorCodeEnum.EmploymentStatusError => EmploymentStatusError.Create(title, message),
-                (int)ErrorCodeEnum.NoSuitableRentalProperties => NoSuitableRentalProperties.Create(title, message),
-                (int)ErrorCodeEnum.DocumentTypeError => DocumentTypeError.Create(title, message),
-                (int)ErrorCodeEnum.SalesContractError => SalesContractDocTypeError.Create(title, message),
-                (int)ErrorCodeEnum.InvalidTaxYearError => InvalidTaxYearError.Create(title, message),
+                (int)ErrorCodeEnum.GeneralError => title ==null? GeneralError.Create(message:message) : GeneralError.Create(title, message),
+                (int)ErrorCodeEnum.RequiredFieldMissing => title == null ? RequiredFieldMissing.Create(message: message) : RequiredFieldMissing.Create(title, message),
+                (int)ErrorCodeEnum.LoanNumberMissing => title == null ? LoanNumberMissing.Create(message: message) : LoanNumberMissing.Create(title, message),
+                (int)ErrorCodeEnum.AddressMismatch => title == null ? AddressMismatch.Create(message: message) : AddressMismatch.Create(title, message),
+                (int)ErrorCodeEnum.NameMismatch => title == null ? NameMismatch.Create(message: message) : NameMismatch.Create(title, message),
+                (int)ErrorCodeEnum.LosIntegrationError => title == null ? LosIntegrationError.Create(message: message) : LosIntegrationError.Create(title, message),
+                (int)ErrorCodeEnum.BirthDateMismatch => title == null ? BirthDateMismatch.Create(message: message) : BirthDateMismatch.Create(title, message),
+                (int)ErrorCodeEnum.LosAddressError => title == null ? LosAddressError.Create(message: message) : LosAddressError.Create(title, message),
+                (int)ErrorCodeEnum.DocAddressError => title == null ? DocAddressError.Create(message: message) : DocAddressError.Create(title, message),
+                (int)ErrorCodeEnum.ExpirationDateError => title == null ? ExpirationDateError.Create(message: message) : ExpirationDateError.Create(title, message),
+                (int)ErrorCodeEnum.EffectiveDateError => title == null ? EffectiveDateError.Create(message: message) : EffectiveDateError.Create(title, message),
+                (int)ErrorCodeEnum.LoanNumberMismatch => title == null ? LoanNumberMismatch.Create(message: message) : LoanNumberMismatch.Create(title, message),
+                (int)ErrorCodeEnum.CalculationError => title == null ? CalculationError.Create(message: message) : CalculationError.Create(title, message),
+                (int)ErrorCodeEnum.DateError => title == null ? DateError.Create(message: message) : DateError.Create(title, message),
+                (int)ErrorCodeEnum.ValueMismatchError => title == null ? ValueMismatchError.Create(message: message) : ValueMismatchError.Create(title, message),
+                (int)ErrorCodeEnum.EmployerMismatch => title == null ? EmployerMismatch.Create(message: message) : EmployerMismatch.Create(title, message),
+                (int)ErrorCodeEnum.LowConfidenceError => title == null ? LowConfidenceError.Create(message: message) : LowConfidenceError.Create(title, message),
+                (int)ErrorCodeEnum.DriversLicenseFormatError => title == null ? DriversLicenseFormatError.Create(message: message) : DriversLicenseFormatError.Create(title, message),
+                (int)ErrorCodeEnum.DocStateError => title == null ? DocStateError.Create(message: message) : DocStateError.Create(title, message),
+                (int)ErrorCodeEnum.EnableLLMQueryError => title == null ? EnableLLMQueryError.Create(message: message) : EnableLLMQueryError.Create(title, message),
+                (int)ErrorCodeEnum.DocumentOutdatedError => title == null ? DocumentOutdatedError.Create(message: message) : DocumentOutdatedError.Create(title, message),
+                (int)ErrorCodeEnum.InvalidPayTypeError => title == null ? InvalidPayTypeError.Create(message: message) : InvalidPayTypeError.Create(title, message),
+                (int)ErrorCodeEnum.MultipleDocumentsError => title == null ? MultipleDocumentsError.Create(message: message) : MultipleDocumentsError.Create(title, message),
+                (int)ErrorCodeEnum.ExpirationDateBeforeCloseError => title == null ? ExpirationDateBeforeCloseError.Create(message: message) : ExpirationDateBeforeCloseError.Create(title, message),
+                (int)ErrorCodeEnum.ExpirationDateIssueDateMismatch => title == null ? ExpirationDateIssueDateMismatch.Create(message: message) : ExpirationDateIssueDateMismatch.Create(title, message),
+                (int)ErrorCodeEnum.EmploymentStatusError => title == null ? EmploymentStatusError.Create(message: message) : EmploymentStatusError.Create(title, message),
+                (int)ErrorCodeEnum.NoSuitableRentalProperties => title == null ? NoSuitableRentalProperties.Create(message: message) : NoSuitableRentalProperties.Create(title, message),
+                (int)ErrorCodeEnum.DocumentTypeError => title == null ? DocumentTypeError.Create(message: message) : DocumentTypeError.Create(title, message),
+                (int)ErrorCodeEnum.SalesContractError => title == null ? SalesContractDocTypeError.Create(message: message) : SalesContractDocTypeError.Create(title, message),
+                (int)ErrorCodeEnum.InvalidTaxYearError => title == null ? InvalidTaxYearError.Create(message: message) : InvalidTaxYearError.Create(title, message),
 
                 _ => new Error()
             };
         }
+        
+        public static string ToStringFormat(dynamic value)
+        {
+
+            decimal val = Convert.ToDecimal(value);
+            CultureInfo us = new CultureInfo("en-US");
+            return val.ToString("N", us);
+        }
+
+        #region OldCode
+        //interpreter.SetFunction("NoOperation", () => { });
+
+        //interpreter.SetFunction("Subtract", new Func<string, string, decimal>(Subtract));
+        //interpreter.SetFunction("Add", new Func<string, string, decimal>(Add));
+        //interpreter.SetFunction("Devide", new Func<string, string, decimal>(Devide));
+        //interpreter.SetFunction("Multiply", new Func<string, string, decimal>(Multiply));
+
+        //public static decimal Subtract(string a, string b)
+        //{
+        //    return (decimal.TryParse(a, out var valA) ? valA : 0)
+        //         - (decimal.TryParse(b, out var valB) ? valB : 0);
+        //}
+        //public static decimal Add(string a, string b)
+        //{
+        //    return (decimal.TryParse(a, out var valA) ? valA : 0)
+        //         + (decimal.TryParse(b, out var valB) ? valB : 0);
+        //}
+        //public static decimal Devide(string a, string b)
+        //{
+        //    return (decimal.TryParse(a, out var valA) ? valA : 0)
+        //         /(decimal.TryParse(b, out var valB) ? valB : 0);
+        //}
+        //public static decimal Multiply(string a, string b)
+        //{
+        //    return (decimal.TryParse(a, out var valA) ? valA : 0)
+        //         * (decimal.TryParse(b, out var valB) ? valB : 0);
+        //}
+        #endregion
     }
 }
