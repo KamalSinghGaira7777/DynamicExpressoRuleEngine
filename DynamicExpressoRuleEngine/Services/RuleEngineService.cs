@@ -1,13 +1,16 @@
 ﻿using DynamicExpresso;
 using DynamicExpressoRuleEngine.Models;
 using DynamicExpressoRuleEngine.ValidationError;
+using Microsoft.Extensions.Caching.Memory;
 using System.Globalization;
 
 namespace DynamicExpressoRuleEngine
 {
     public class RuleEngineService
     {
-        public static async Task RuleEngineValidateDocuments(MortgageValidatedDocument _doc, Interpreter interpreter) 
+        private static readonly MemoryCache _ruleCache = new MemoryCache(new MemoryCacheOptions());
+
+        public static async Task RuleEngineValidateDocuments(MortgageValidatedDocument _doc, Interpreter interpreter)
         {
             try
             {
@@ -17,10 +20,10 @@ namespace DynamicExpressoRuleEngine
                  .Build();
 
                 var rules = config.GetSection("RuleEngine:Rules").Get<List<ValidationRule>>();
-                
+
                 foreach (var prop in _doc.ProcessedDocument.Results)
                 {
-                    interpreter.SetVariable(prop.Key, prop?.Value == null?string.Empty:prop.Value.ToString());
+                    interpreter.SetVariable(prop.Key, prop?.Value == null ? string.Empty : prop.Value.ToString());
                 }
 
                 interpreter.SetFunction("AddValue", (dynamic? value, string? field) =>
@@ -46,8 +49,8 @@ namespace DynamicExpressoRuleEngine
 
                 interpreter.SetFunction("AddNotes", (string? message, string? field) =>
                 {
-                        var documentField = _doc.ProcessedDocument.Results.Where(x => x.Key == field).FirstOrDefault();
-                        documentField?.ProcessingResult.AddNote(message);
+                    var documentField = _doc.ProcessedDocument.Results.Where(x => x.Key == field).FirstOrDefault();
+                    documentField?.ProcessingResult.AddNote(message);
                 });
 
                 interpreter.SetFunction("AddPotentialValues", (dynamic? value, string? field) =>
@@ -69,16 +72,37 @@ namespace DynamicExpressoRuleEngine
 
                 interpreter.SetFunction("ToStringFormat", new Func<dynamic, string>(ToStringFormat));
 
+                interpreter.SetFunction("ContainsAny", (List<string> list, string value) =>
+                {
+                    return list.Any(sub => value.ToLower().Contains(sub));
+                });
+
                 foreach (var rule in rules)
                 {
-                    bool result = interpreter.Eval<bool>(rule.Condition);
+                    // Cache and evaluate condition
+                    var conditionKey = $"rule:condition:{rule.Condition}";
+                    var conditionLambda = _ruleCache.GetOrCreate(conditionKey, entry =>
+                    {
+                        entry.SlidingExpiration = TimeSpan.FromMinutes(10);
+                        return interpreter.Parse(rule.Condition);
+                    });
+
+                    bool result = (bool)conditionLambda.Invoke();
 
                     if (result)
                     {
                         var actions = rule.Action.Split('#');
+
                         foreach (var action in actions)
                         {
-                            interpreter.Eval(action.Trim());
+                            var actionKey = $"rule:action:{action.Trim()}";
+                            var actionLambda = _ruleCache.GetOrCreate(actionKey, entry =>
+                            {
+                                entry.SlidingExpiration = TimeSpan.FromMinutes(10);
+                                return interpreter.Parse(action.Trim());
+                            });
+
+                            actionLambda.Invoke();
                         }
                     }
                 }
@@ -92,7 +116,7 @@ namespace DynamicExpressoRuleEngine
         {
             return errorCode switch
             {
-                (int)ErrorCodeEnum.GeneralError => title ==null? GeneralError.Create(message:message) : GeneralError.Create(title, message),
+                (int)ErrorCodeEnum.GeneralError => title == null ? GeneralError.Create(message: message) : GeneralError.Create(title, message),
                 (int)ErrorCodeEnum.RequiredFieldMissing => title == null ? RequiredFieldMissing.Create(message: message) : RequiredFieldMissing.Create(title, message),
                 (int)ErrorCodeEnum.LoanNumberMissing => title == null ? LoanNumberMissing.Create(message: message) : LoanNumberMissing.Create(title, message),
                 (int)ErrorCodeEnum.AddressMismatch => title == null ? AddressMismatch.Create(message: message) : AddressMismatch.Create(title, message),
@@ -126,10 +150,9 @@ namespace DynamicExpressoRuleEngine
                 _ => new Error()
             };
         }
-        
+
         public static string ToStringFormat(dynamic value)
         {
-
             decimal val = Convert.ToDecimal(value);
             CultureInfo us = new CultureInfo("en-US");
             return val.ToString("N", us);
@@ -142,6 +165,20 @@ namespace DynamicExpressoRuleEngine
         //interpreter.SetFunction("Add", new Func<string, string, decimal>(Add));
         //interpreter.SetFunction("Devide", new Func<string, string, decimal>(Devide));
         //interpreter.SetFunction("Multiply", new Func<string, string, decimal>(Multiply));
+
+        //foreach (var rule in rules)
+        //{
+        //    bool result = interpreter.Eval<bool>(rule.Condition);
+
+        //    if (result)
+        //    {
+        //        var actions = rule.Action.Split('#');
+        //        foreach (var action in actions)
+        //        {
+        //            interpreter.Eval(action.Trim());
+        //        }
+        //    }
+        //}
 
         //public static decimal Subtract(string a, string b)
         //{
